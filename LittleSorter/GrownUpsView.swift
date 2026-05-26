@@ -14,8 +14,8 @@ struct GrownUpsView: View {
 
     // TODO: Replace these with your real hosted URLs before submitting.
     // Both are REQUIRED for the App Store (Privacy Policy especially for Kids).
-    private let privacyURL = URL(string: "https://littlesorter.app/privacy")!
-    private let supportURL = URL(string: "https://littlesorter.app/support")!
+    private let privacyURL = URL(string: "https://ethanir.github.io/little-sorter/privacy.html")!
+    private let supportURL = URL(string: "https://ethanir.github.io/little-sorter/support.html")!
 
     var body: some View {
         NavigationStack {
