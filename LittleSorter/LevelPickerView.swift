@@ -64,8 +64,6 @@ struct LevelPickerView: View {
                 .padding(.bottom, 14)
                 .accessibilityLabel("For grown-ups")
             }
-
-            MenuCritters()
         }
         .statusBarHidden(true)
         .sheet(item: $paymentFlow) { flow in
