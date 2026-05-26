@@ -1,0 +1,24 @@
+{
+  "identifier" : "LITTLESORTER_CONFIG",
+  "nonRenewingSubscriptions" : [],
+  "products" : [
+    {
+      "displayPrice" : "2.99",
+      "familyShareable" : false,
+      "internalID" : "littlesorter_unlock_all",
+      "localizations" : [
+        {
+          "description" : "Unlock all levels forever.",
+          "displayName" : "Unlock All Levels",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.ethanirimiciuc.LittleSorter.unlockall",
+      "referenceName" : "Unlock All Levels",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : { },
+  "subscriptionGroups" : [],
+  "version" : { "major" : 3, "minor" : 0 }
+}
