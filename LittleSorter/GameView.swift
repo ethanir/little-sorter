@@ -28,6 +28,8 @@ struct GameView: View {
     var onComplete: (Int, Double?) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    private var isPad: Bool { hSizeClass == .regular }
 
     @State private var chosenItems: [SortItem]
     @State private var placed: Set<UUID> = []
@@ -37,18 +39,14 @@ struct GameView: View {
     @State private var celebrating = false
     @State private var starPop = false
 
-    // Haptic triggers. `.sensoryFeedback` fires on CHANGE only, so starting at 0
-    // means no buzz on first appearance — only on real drops.
     @State private var successPulse: Int = 0
     @State private var bonkPulse: Int = 0
 
-    // Correct-drop celebration
     @State private var burst: ZoneBurst? = nil
     @State private var burstCounter: Int = 0
     @State private var bouncingZone: String? = nil
     @State private var warmingEffects = true
 
-    // Timed mode
     @State private var elapsed: Double = 0
     @State private var startDate: Date? = nil
     @State private var timerActive = false
@@ -58,10 +56,6 @@ struct GameView: View {
     private let timeLimit: Double = 30
     private let tick = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
 
-    /// Real elapsed time, derived from a start `Date` rather than an accumulator.
-    /// A `+= 0.1` accumulator silently undercounts whenever the run loop is busy
-    /// (animation, coalescing, backgrounding), which would drift the star
-    /// thresholds; reading the wall clock keeps scores honest.
     private func currentElapsed() -> Double {
         guard let startDate else { return 0 }
         return min(timeLimit, Date().timeIntervalSince(startDate))
@@ -73,7 +67,6 @@ struct GameView: View {
         timerActive = true
     }
 
-    /// Faster finish = more stars. ≤10s → 3, ≤20s → 2, otherwise (within 30s) → 1.
     private static func stars(for elapsed: Double) -> Int {
         if elapsed <= 10 { return 3 }
         if elapsed <= 20 { return 2 }
@@ -97,7 +90,6 @@ struct GameView: View {
                                                          max: 6))
     }
 
-    /// Random subset that still guarantees at least one item per zone when possible.
     private static func pick(from pool: [SortItem], zones: [DropZone], max: Int) -> [SortItem] {
         var remaining = pool.shuffled()
         var chosen: [SortItem] = []
@@ -116,7 +108,6 @@ struct GameView: View {
         chosenItems.filter { !placed.contains($0.id) }
     }
 
-    // Renders custom art when `imageName` is set, else the SF Symbol.
     @ViewBuilder
     private func itemArt(_ item: SortItem, size: CGFloat) -> some View {
         if let name = item.imageName, !name.isEmpty {
@@ -129,17 +120,16 @@ struct GameView: View {
     }
 
     @ViewBuilder
-    private func trayArt(_ item: SortItem) -> some View {
+    private func trayArt(_ item: SortItem, size: CGFloat) -> some View {
         if let name = item.imageName, !name.isEmpty {
-            Image(name).resizable().scaledToFit().frame(width: 24, height: 24)
+            Image(name).resizable().scaledToFit().frame(width: size, height: size)
         } else {
             Image(systemName: item.symbol)
-                .font(.system(size: 22))
+                .font(.system(size: size * 0.9))
                 .foregroundStyle(item.color)
         }
     }
 
-    // Illustrated zone art when `imageName` is set, else the SF Symbol.
     @ViewBuilder
     private func zoneArt(_ zone: DropZone, size: CGFloat) -> some View {
         if let name = zone.imageName, !name.isEmpty {
@@ -152,96 +142,119 @@ struct GameView: View {
     }
 
     var body: some View {
-        ZStack {
-            if let bg = level.backgroundImage {
-                Image(bg).resizable().scaledToFill().ignoresSafeArea()
-            } else {
-                level.background.ignoresSafeArea()
-            }
-
-            VStack(spacing: 0) {
-                header
-
-                if placed.isEmpty && !celebrating {
-                    instructionHint
-                        .padding(.top, 6)
-                        .transition(.opacity)
-                }
-
-                if timed && !celebrating && !failed {
-                    timerPill
-                        .padding(.top, 6)
-                        .transition(.opacity)
-                }
-
-                Spacer(minLength: 8)
-                zonesRow
-                Spacer(minLength: 8)
-                itemsRow
-                    .padding(.bottom, 24)
-            }
-            .padding(.horizontal, 24)
-            .animation(.easeInOut(duration: 0.3), value: placed.isEmpty)
-
-            if celebrating {
-                celebrationOverlay
-                    .transition(.opacity)
-            }
-
-            if failed {
-                failOverlay
-                    .transition(.opacity)
-            }
-
-            if let b = burst {
-                if reduceMotion {
-                    // Calm, non-flying acknowledgement instead of a particle burst.
-                    Circle()
-                        .fill(.white.opacity(0.35))
-                        .frame(width: 90, height: 90)
-                        .position(b.center)
-                        .id(b.id)
-                        .transition(.opacity)
-                        .allowsHitTesting(false)
+        GeometryReader { geo in
+            ZStack {
+                if let bg = level.backgroundImage {
+                    Image(bg).resizable().scaledToFill().ignoresSafeArea()
                 } else {
-                    DropEffectView(effect: b.effect)
-                        .frame(width: 300, height: 300)
-                        .position(b.center)
-                        .id(b.id)
+                    level.background.ignoresSafeArea()
+                }
+
+                // iPhone keeps its original fixed layout; iPad uses a fill-based
+                // layout where the item tray takes all remaining space (so items
+                // can never overflow off the bottom).
+                if isPad {
+                    iPadContent(geo)
+                } else {
+                    iPhoneContent
+                }
+
+                if celebrating {
+                    celebrationOverlay
+                        .transition(.opacity)
+                }
+
+                if failed {
+                    failOverlay
+                        .transition(.opacity)
+                }
+
+                if let b = burst {
+                    if reduceMotion {
+                        Circle()
+                            .fill(.white.opacity(0.35))
+                            .frame(width: 90, height: 90)
+                            .position(b.center)
+                            .id(b.id)
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    } else {
+                        DropEffectView(effect: b.effect)
+                            .frame(width: isPad ? 380 : 300, height: isPad ? 380 : 300)
+                            .position(b.center)
+                            .id(b.id)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                if warmingEffects && !reduceMotion {
+                    DropEffectView(effect: .sparkle)
+                        .frame(width: 40, height: 40)
+                        .opacity(0.001)
                         .allowsHitTesting(false)
                 }
             }
+            .coordinateSpace(.named(spaceName))
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { warmingEffects = false }
+                if timed { startTimer() }
+            }
+            .onReceive(tick) { _ in
+                guard timed, timerActive, !celebrating, !failed else { return }
+                elapsed = currentElapsed()
+                if elapsed >= timeLimit {
+                    timerActive = false
+                    timeUp()
+                }
+            }
+            .onPreferenceChange(ZoneFramePreferenceKey.self) { frames in
+                zoneFrames = frames
+            }
+            .statusBarHidden(true)
+            .sensoryFeedback(.success, trigger: successPulse)
+            .sensoryFeedback(.impact(weight: .light), trigger: bonkPulse)
+        }
+    }
 
-            if warmingEffects && !reduceMotion {
-                // Pre-warm the Canvas/TimelineView GPU pipeline so the FIRST correct
-                // drop's burst doesn't hitch. Rendered invisibly for a moment on entry.
-                DropEffectView(effect: .sparkle)
-                    .frame(width: 40, height: 40)
-                    .opacity(0.001)
-                    .allowsHitTesting(false)
+    // MARK: Layouts
+
+    private var iPhoneContent: some View {
+        VStack(spacing: 0) {
+            header
+            if placed.isEmpty && !celebrating {
+                instructionHint.padding(.top, 6).transition(.opacity)
             }
-        }
-        .coordinateSpace(.named(spaceName))
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { warmingEffects = false }
-            if timed { startTimer() }
-        }
-        .onReceive(tick) { _ in
-            guard timed, timerActive, !celebrating, !failed else { return }
-            elapsed = currentElapsed()
-            if elapsed >= timeLimit {
-                timerActive = false
-                timeUp()
+            if timed && !celebrating && !failed {
+                timerPill.padding(.top, 6).transition(.opacity)
             }
+            Spacer(minLength: 8)
+            zonesRow(height: 175)
+            Spacer(minLength: 8)
+            itemsTray(fixedHeight: 230)
+                .padding(.bottom, 24)
         }
-        .onPreferenceChange(ZoneFramePreferenceKey.self) { frames in
-            zoneFrames = frames
+        .padding(.horizontal, 24)
+        .animation(.easeInOut(duration: 0.3), value: placed.isEmpty)
+    }
+
+    private func iPadContent(_ geo: GeometryProxy) -> some View {
+        VStack(spacing: 0) {
+            header
+            if placed.isEmpty && !celebrating {
+                instructionHint.padding(.top, 8).transition(.opacity)
+            }
+            if timed && !celebrating && !failed {
+                timerPill.padding(.top, 8).transition(.opacity)
+            }
+            Spacer().frame(height: geo.size.height * 0.05)
+            zonesRow(height: geo.size.height * 0.26)
+            Spacer().frame(height: geo.size.height * 0.03)
+            // No fixed height — fills all remaining space, items sized to fit it.
+            itemsTray(fixedHeight: nil)
+                .padding(.bottom, 16)
         }
-        .statusBarHidden(true)
-        // SwiftUI-native haptics (iOS 17) — no UIKit. No-ops on devices without
-        // a Taptic Engine and in the simulator.
-        .sensoryFeedback(.success, trigger: successPulse)
-        .sensoryFeedback(.impact(weight: .light), trigger: bonkPulse)
+        .padding(.horizontal, 40)
+        .animation(.easeInOut(duration: 0.3), value: placed.isEmpty)
     }
 
     // MARK: Header
@@ -250,10 +263,10 @@ struct GameView: View {
         HStack {
             Button(action: onExit) {
                 Image(systemName: "chevron.left.circle.fill")
-                    .font(.system(size: 46))
+                    .font(.system(size: isPad ? 54 : 46))
                     .foregroundStyle(.white, .black.opacity(0.25))
             }
-            .accessibilityLabel("Back")
+            .accessibilityLabel("Back to menu")
 
             Spacer()
         }
@@ -264,11 +277,11 @@ struct GameView: View {
         HStack(spacing: 8) {
             Image(systemName: "hand.draw.fill")
             Text("Drag each one where it belongs")
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: isPad ? 19 : 15, weight: .semibold, design: .rounded))
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
+        .padding(.horizontal, isPad ? 20 : 16)
+        .padding(.vertical, isPad ? 11 : 9)
         .background(Capsule().fill(.black.opacity(0.22)))
     }
 
@@ -277,16 +290,16 @@ struct GameView: View {
         let low = left <= 10
         return HStack(spacing: 7) {
             Image(systemName: "stopwatch.fill")
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: isPad ? 22 : 18, weight: .bold))
             Text("\(Int(ceil(left)))")
-                .font(.system(size: 22, weight: .heavy, design: .rounded).monospacedDigit())
+                .font(.system(size: isPad ? 26 : 22, weight: .heavy, design: .rounded).monospacedDigit())
             Text("s")
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(.system(size: isPad ? 17 : 15, weight: .bold, design: .rounded))
                 .opacity(0.85)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
+        .padding(.horizontal, isPad ? 22 : 18)
+        .padding(.vertical, isPad ? 10 : 8)
         .background(Capsule().fill(low ? Color.red.opacity(0.9) : Color.black.opacity(0.3)))
         .scaleEffect(low ? 1.06 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.5), value: low)
@@ -295,42 +308,45 @@ struct GameView: View {
 
     // MARK: Drop zones
 
-    private var zonesRow: some View {
-        HStack(spacing: 12) {
+    private func zonesRow(height: CGFloat) -> some View {
+        HStack(spacing: isPad ? 20 : 12) {
             ForEach(level.zones) { zone in
-                zoneView(zone)
+                zoneView(zone, height: height)
             }
         }
+        .frame(height: height)
     }
 
-    private func zoneView(_ zone: DropZone) -> some View {
+    private func zoneView(_ zone: DropZone, height: CGFloat) -> some View {
         let itemsHere = chosenItems.filter { placed.contains($0.id) && $0.targetZoneID == zone.id }
+        let artSize = height * 0.42
+        let corner: CGFloat = isPad ? 32 : 26
 
-        return VStack(spacing: 6) {
-            zoneArt(zone, size: 74)
+        return VStack(spacing: isPad ? 10 : 6) {
+            zoneArt(zone, size: artSize)
 
             Text(zone.label)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: isPad ? 22 : 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.9))
 
-            HStack(spacing: 4) {
+            HStack(spacing: isPad ? 6 : 4) {
                 ForEach(itemsHere) { item in
-                    trayArt(item)
+                    trayArt(item, size: isPad ? 34 : 24)
                         .transition(.scale.combined(with: .opacity))
                 }
             }
-            .frame(minHeight: 30)
+            .frame(minHeight: isPad ? 42 : 30)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 175)
+        .frame(height: height)
         .scaleEffect(bouncingZone == zone.id && !reduceMotion ? 1.06 : 1.0)
         .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.45), value: bouncingZone)
         .background(
-            RoundedRectangle(cornerRadius: 26)
+            RoundedRectangle(cornerRadius: corner)
                 .fill(zone.color.opacity(0.55))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 26)
+            RoundedRectangle(cornerRadius: corner)
                 .strokeBorder(.white.opacity(0.6), lineWidth: 3)
         )
         .background(
@@ -344,22 +360,29 @@ struct GameView: View {
         .accessibilityLabel(zone.label)
     }
 
-    // MARK: Items area (up to 3 per row, wraps to a second row, gently staggered)
+    // MARK: Items area
+    //
+    // Sizes items to fit BOTH the available width and the available height.
+    // When `fixedHeight` is nil (iPad) the tray fills all the remaining space,
+    // so the items can never overflow off the bottom — every item is visible.
 
-    private var itemsRow: some View {
-        GeometryReader { geo in
+    private func itemsTray(fixedHeight: CGFloat?) -> some View {
+        GeometryReader { g in
             let perRow = 3
-            let spacing: CGFloat = 16
-            let available = geo.size.width - spacing * CGFloat(perRow - 1)
-            let size = min(104, max(70, available / CGFloat(perRow)))
+            let spacing: CGFloat = isPad ? 24 : 16
+            let totalRows = max(1, Int(ceil(Double(chosenItems.count) / Double(perRow))))
+            let maxByW = (g.size.width - spacing * CGFloat(perRow - 1)) / CGFloat(perRow)
+            let maxByH = (g.size.height - spacing * CGFloat(totalRows - 1)) / CGFloat(totalRows)
+            let cap: CGFloat = isPad ? 150 : 104
+            let size = max(56, min(cap, min(maxByW, maxByH)))
             let rows = chunk(unplacedItems, into: perRow)
 
-            VStack(spacing: 16) {
+            return VStack(spacing: spacing) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     HStack(spacing: spacing) {
                         ForEach(Array(row.enumerated()), id: \.element.id) { idx, item in
                             itemView(item, size: size)
-                                .offset(y: idx % 2 == 0 ? -7 : 7)  // playful, not a straight line
+                                .offset(y: idx % 2 == 0 ? -6 : 6)
                         }
                     }
                 }
@@ -367,7 +390,7 @@ struct GameView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: unplacedItems)
         }
-        .frame(height: 230)
+        .frame(height: fixedHeight)
     }
 
     private func chunk(_ items: [SortItem], into n: Int) -> [[SortItem]] {
@@ -386,7 +409,7 @@ struct GameView: View {
             .overlay(alignment: .top) {
                 if isDragging {
                     Text(item.name)
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .font(.system(size: isPad ? 20 : 16, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
@@ -408,7 +431,6 @@ struct GameView: View {
     private func dragGesture(for item: SortItem) -> some Gesture {
         DragGesture(coordinateSpace: .named(spaceName))
             .onChanged { value in
-                // Speak the name once, the moment this item becomes the dragged one.
                 if draggingID != item.id {
                     SpeechManager.shared.speak(item.name)
                 }
@@ -434,10 +456,6 @@ struct GameView: View {
         }
     }
 
-    /// Toddlers are imprecise, so each zone's hit area is inflated. Because inflated
-    /// rects can overlap (and `zoneFrames` has no stable iteration order), we collect
-    /// every zone whose padded rect contains the point and break ties by the nearest
-    /// center — so a near-boundary drop resolves deterministically, not at random.
     private func zone(at point: CGPoint) -> String? {
         let candidates = level.zones.compactMap { z -> (id: String, dist: CGFloat)? in
             guard let rect = zoneFrames[z.id],
@@ -449,11 +467,9 @@ struct GameView: View {
     }
 
     private func placeCorrect(_ item: SortItem) {
-        // Happy ascending chime — now one buffer, so both notes play fully.
         ToneManager.shared.playSequence([523.25, 783.99])
         successPulse += 1
 
-        // Themed celebration at the zone: a particle burst + a little zone bounce.
         if let rect = zoneFrames[item.targetZoneID],
            let zone = level.zones.first(where: { $0.id == item.targetZoneID }) {
             burstCounter += 1
@@ -474,7 +490,7 @@ struct GameView: View {
         }
 
         if placed.count == chosenItems.count {
-            timerActive = false   // stop the clock the instant the last item lands
+            timerActive = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                 celebrate()
             }
@@ -484,7 +500,6 @@ struct GameView: View {
     private func celebrate() {
         guard !failed else { return }
         timerActive = false
-        // Full arpeggio in a single buffer — no clipping.
         ToneManager.shared.playSequence([523.25, 659.25, 783.99, 1046.50])
         let e = timed ? currentElapsed() : 0
         elapsed = e
@@ -501,7 +516,6 @@ struct GameView: View {
 
     private func timeUp() {
         guard !celebrating else { return }
-        // Gentle descending "aww" — never harsh for little ones.
         ToneManager.shared.playSequence([329.63, 261.63])
         bonkPulse += 1
         withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
@@ -536,9 +550,9 @@ struct GameView: View {
                 ConfettiView()
             }
 
-            VStack(spacing: 24) {
+            VStack(spacing: isPad ? 28 : 24) {
                 Text("Yay! You did it! 🎉")
-                    .font(.system(size: 34, weight: .heavy, design: .rounded))
+                    .font(.system(size: isPad ? 42 : 34, weight: .heavy, design: .rounded))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
                     .multilineTextAlignment(.center)
@@ -547,7 +561,7 @@ struct GameView: View {
                     HStack(spacing: 14) {
                         ForEach(0..<3, id: \.self) { i in
                             Image(systemName: "star.fill")
-                                .font(.system(size: 60))
+                                .font(.system(size: isPad ? 72 : 60))
                                 .foregroundStyle(i < earnedStars ? .yellow : .white.opacity(0.35))
                                 .shadow(color: i < earnedStars ? .orange.opacity(0.6) : .clear, radius: 10)
                                 .scaleEffect(reduceMotion ? 1.0 : (starPop ? 1.0 : 0.2))
@@ -560,13 +574,13 @@ struct GameView: View {
 
                     if let t = finishTime {
                         Text(String(format: "Finished in %.1fs", t))
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .font(.system(size: isPad ? 24 : 20, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
                     }
                 } else {
                     Image(systemName: "star.fill")
-                        .font(.system(size: 96))
+                        .font(.system(size: isPad ? 116 : 96))
                         .foregroundStyle(.yellow)
                         .shadow(color: .orange.opacity(0.6), radius: 14)
                         .scaleEffect(reduceMotion ? 1.0 : (starPop ? 1.0 : 0.2))
@@ -584,17 +598,27 @@ struct GameView: View {
                 Button(action: onNext) {
                     HStack(spacing: 12) {
                         Image(systemName: "arrow.right.circle.fill")
-                            .font(.system(size: 40))
+                            .font(.system(size: isPad ? 46 : 40))
                         Text("Next")
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
+                            .font(.system(size: isPad ? 40 : 36, weight: .bold, design: .rounded))
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 38)
-                    .padding(.vertical, 18)
+                    .padding(.horizontal, isPad ? 46 : 38)
+                    .padding(.vertical, isPad ? 20 : 18)
                     .background(Capsule().fill(.green))
                     .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
                 }
                 .accessibilityLabel("Next level")
+
+                Button(action: onExit) {
+                    Text("Back to Menu")
+                        .font(.system(size: isPad ? 22 : 20, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .padding(.horizontal, 26)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(.white.opacity(0.22)))
+                }
+                .accessibilityLabel("Back to menu")
             }
             .padding(.horizontal, 24)
         }
@@ -608,25 +632,25 @@ struct GameView: View {
 
             VStack(spacing: 22) {
                 Text("Time's up! ⏰")
-                    .font(.system(size: 34, weight: .heavy, design: .rounded))
+                    .font(.system(size: isPad ? 42 : 34, weight: .heavy, design: .rounded))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
 
                 Image(systemName: "hourglass")
-                    .font(.system(size: 78))
+                    .font(.system(size: isPad ? 96 : 78))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.3), radius: 10)
 
                 Button(action: restart) {
                     HStack(spacing: 12) {
                         Image(systemName: "arrow.counterclockwise.circle.fill")
-                            .font(.system(size: 38))
+                            .font(.system(size: isPad ? 44 : 38))
                         Text("Try Again")
-                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                            .font(.system(size: isPad ? 36 : 32, weight: .bold, design: .rounded))
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 34)
-                    .padding(.vertical, 16)
+                    .padding(.horizontal, isPad ? 40 : 34)
+                    .padding(.vertical, isPad ? 18 : 16)
                     .background(Capsule().fill(.green))
                     .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
                 }
@@ -634,7 +658,7 @@ struct GameView: View {
 
                 Button(action: onExit) {
                     Text("Back to Menu")
-                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                        .font(.system(size: isPad ? 22 : 20, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.95))
                         .padding(.horizontal, 26)
                         .padding(.vertical, 12)
